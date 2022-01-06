@@ -1,4 +1,4 @@
-package com.atguigu.utils;
+package com.atguigu.func;
 
 import com.alibaba.fastjson.JSONObject;
 import io.debezium.data.Envelope;
@@ -16,7 +16,7 @@ import java.util.List;
  * @create 2021/12/24 19:38
  */
 //自定义反序列化器
-public class MyDeserial implements com.ververica.cdc.debezium.DebeziumDeserializationSchema<String> {
+public class MyCustomDeserializer implements com.ververica.cdc.debezium.DebeziumDeserializationSchema<String> {
 
 
     @Override

@@ -1,6 +1,6 @@
-package com.atguigu.app;
+package com.atguigu.app.ods;
 
-import com.atguigu.utils.MyDeserial;
+import com.atguigu.func.MyCustomDeserializer;
 import com.atguigu.utils.MyKafkaUtil;
 import com.ververica.cdc.connectors.mysql.MySqlSource;
 import com.ververica.cdc.connectors.mysql.table.StartupOptions;
@@ -25,9 +25,10 @@ public class Flink_CDCWithCustomerSchema {
                 .databaseList("gmall_flink")
                 .username("root")
                 .password("123456")
-//                .tableList("gmall_flink.base_region")
-                .startupOptions(StartupOptions.initial())
-                .deserializer(new MyDeserial())
+//                .tableList("gmall_flink.base_trademark")
+//                .startupOptions(StartupOptions.initial())
+                .startupOptions(StartupOptions.latest())
+                .deserializer(new MyCustomDeserializer())
                 .build();
 
         DataStreamSource<String> streamSource = env.addSource(sourceFunction);
