@@ -3,6 +3,8 @@ package com.atguigu.app.dws;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.atguigu.bean.VisitorStats;
+import com.atguigu.utils.ClickHouseUtil;
+import com.atguigu.utils.DateTimeUtil;
 import com.atguigu.utils.MyKafkaUtil;
 import org.apache.flink.api.common.eventtime.SerializableTimestampAssigner;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
@@ -22,16 +24,15 @@ import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer;
 import org.apache.flink.util.Collector;
 
 import java.time.Duration;
+import java.util.Date;
 
-/**
- * @author JianJun
- * @create 2021/12/31 13:53
- */
 public class VisitorStatsApp {
+
     public static void main(String[] args) throws Exception {
+
         //TODO 1.获取执行环境
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setParallelism(1);//生产环境应该设置为Kafka主题的分区数
+        env.setParallelism(1);  //生产环境应该设置为Kafka主题的分区数
 
         //2.Flink-CDC将读取binlog的位置信息以状态的方式保存在CK,如果想要做到断点续传,需要从Checkpoint或者Savepoint启动程序
         //2.1 开启Checkpoint,每隔5秒钟做一次CK
@@ -63,17 +64,16 @@ public class VisitorStatsApp {
 
         //TODO 3.统一数据格式
         SingleOutputStreamOperator<VisitorStats> visitorStatsWithPVDS = pageViewDStream.map(line -> {
+
             JSONObject jsonObject = JSON.parseObject(line);
             JSONObject common = jsonObject.getJSONObject("common");
 
-            Long sv = 0L;
+            long sv = 0L;
             if (jsonObject.getJSONObject("page").getString("last_page_id") == null) {
                 sv = 1L;
             }
 
-            return new VisitorStats(
-                    "",
-                    "",
+            return new VisitorStats("", "",
                     common.getString("vc"),
                     common.getString("ch"),
                     common.getString("ar"),
@@ -125,19 +125,15 @@ public class VisitorStatsApp {
         //TODO 4.Union多个流
         DataStream<VisitorStats> unionDS = visitorStatsWithPVDS.union(visitorStatsWithUVDS, visitorStatsWithUJDS);
 
-        //TODO 5.提取时间戳,生成WaterMark
-        SingleOutputStreamOperator<VisitorStats> visitorStatsWithWMDS = unionDS.assignTimestampsAndWatermarks(
-                WatermarkStrategy.<VisitorStats>forBoundedOutOfOrderness(Duration.ofSeconds(14))
-                        .withTimestampAssigner(new SerializableTimestampAssigner<VisitorStats>() {
-                            @Override
-                            public long extractTimestamp(VisitorStats element, long recordTimestamp) {
-                                return element.getTs();
-                            }
-                        }));
+        //TODO 5.提取时间戳生成WaterMark
+        SingleOutputStreamOperator<VisitorStats> visitorStatsWithWMDS = unionDS.assignTimestampsAndWatermarks(WatermarkStrategy.<VisitorStats>forBoundedOutOfOrderness(Duration.ofSeconds(14)).withTimestampAssigner(new SerializableTimestampAssigner<VisitorStats>() {
+            @Override
+            public long extractTimestamp(VisitorStats element, long recordTimestamp) {
+                return element.getTs();
+            }
+        }));
 
-
-        //TODO 6 分组,开窗,聚合
-        //分组,开窗
+        //TODO 6.分组、开窗、聚合
         WindowedStream<VisitorStats, Tuple4<String, String, String, String>, TimeWindow> windowedStream = visitorStatsWithWMDS.keyBy(new KeySelector<VisitorStats, Tuple4<String, String, String, String>>() {
             @Override
             public Tuple4<String, String, String, String> getKey(VisitorStats value) throws Exception {
@@ -148,66 +144,51 @@ public class VisitorStatsApp {
             }
         }).window(TumblingEventTimeWindows.of(Time.seconds(10)));
 
-        //聚合
-        windowedStream.reduce(new ReduceFunction<VisitorStats>() {
+
+//        windowedStream.reduce(new ReduceFunction<VisitorStats>() {
+//            @Override
+//            public VisitorStats reduce(VisitorStats value1, VisitorStats value2) throws Exception {
+//                return null;
+//            }
+//        });
+//        windowedStream.apply(new WindowFunction<VisitorStats, Object, Tuple4<String, String, String, String>, TimeWindow>() {
+//            @Override
+//            public void apply(Tuple4<String, String, String, String> key, TimeWindow timeWindow, Iterable<VisitorStats> iterable, Collector<Object> collector) throws Exception {
+//            }
+//        });
+        SingleOutputStreamOperator<VisitorStats> result = windowedStream.reduce(new ReduceFunction<VisitorStats>() {
             @Override
             public VisitorStats reduce(VisitorStats value1, VisitorStats value2) throws Exception {
-                return null;
+                value1.setPv_ct(value1.getPv_ct() + value2.getPv_ct());
+                value1.setSv_ct(value1.getSv_ct() + value2.getSv_ct());
+                value1.setUv_ct(value1.getUv_ct() + value2.getUv_ct());
+                value1.setUj_ct(value1.getUj_ct() + value2.getUj_ct());
+                value1.setDur_sum(value1.getDur_sum() + value2.getDur_sum());
+                return value1;
             }
         }, new WindowFunction<VisitorStats, VisitorStats, Tuple4<String, String, String, String>, TimeWindow>() {
             @Override
-            public void apply(Tuple4<String, String, String, String> stringStringStringStringTuple4, TimeWindow window, Iterable<VisitorStats> input, Collector<VisitorStats> out) throws Exception {
+            public void apply(Tuple4<String, String, String, String> key, TimeWindow timeWindow, Iterable<VisitorStats> iterable, Collector<VisitorStats> collector) throws Exception {
 
+                //取出数据
+                VisitorStats visitorStats = iterable.iterator().next();
+
+                //补充窗口信息
+                visitorStats.setStt(DateTimeUtil.toYMDhms(new Date(timeWindow.getStart())));
+                visitorStats.setEdt(DateTimeUtil.toYMDhms(new Date(timeWindow.getEnd())));
+
+                //输出数据
+                collector.collect(visitorStats);
             }
         });
 
         //TODO 7.将数据写入ClickHouse
-
+        result.print(">>>>>>>");
+        result.addSink(ClickHouseUtil.getSink("insert into visitor_stats_210726 values(?,?,?,?,?,?,?,?,?,?,?,?)"));
 
         //TODO 8.启动任务
         env.execute("VisitorStatsApp");
 
-
     }
+
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

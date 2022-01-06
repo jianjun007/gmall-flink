@@ -114,6 +114,7 @@ public class UserJumpDetailApp {
 
         //TODO 10.将数据写入Kafka
         unionDS.map(JSONAware::toJSONString).addSink(MyKafkaUtil.getKafkaSink(sinkTopic));
+        unionDS.print("UnionDS>>>>>>");
 
         //TODO 11.启动任务
         env.execute("UserJumpDetailApp");
